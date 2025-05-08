@@ -55,31 +55,52 @@ class ContentAnalyzer:
     
     def _prepare_content(self, website_data):
         """Prepare website content for LLM analysis"""
-        # Start with basic information
+        # Get max content length from environment or use default
+        max_length = int(os.environ.get('MAX_CONTENT_LENGTH', 2000))
+        
+        # Start with basic information (most important)
         content = f"Website: {website_data['url']}\n"
         content += f"Company Name: {website_data['name']}\n"
         content += f"Page Title: {website_data['title']}\n"
         content += f"Description: {website_data['description']}\n\n"
         
-        # Add main content (truncated if too long)
-        main_content = website_data['main_content']
-        if len(main_content) > 3000:
-            content += f"Main Content (truncated): {main_content[:3000]}...\n\n"
-        else:
-            content += f"Main Content: {main_content}\n\n"
+        # Extract the most important content first - the description and about page
+        about_content = ""
+        if 'about' in website_data.get('important_pages', {}):
+            about_page = website_data['important_pages']['about']
+            if 'content' in about_page and 'error' not in about_page:
+                about_content = about_page['content']
+                # Only use first 1000 chars of about page
+                if len(about_content) > 1000:
+                    about_content = about_content[:1000]
         
-        # Add important pages content
-        for page_type, page_data in website_data.get('important_pages', {}).items():
-            if 'error' in page_data:
-                continue
-                
-            page_content = page_data.get('content', '')
-            if page_content:
-                # Truncate if too long
-                if len(page_content) > 2000:
-                    content += f"{page_type.capitalize()} Page Content (truncated): {page_content[:2000]}...\n\n"
-                else:
-                    content += f"{page_type.capitalize()} Page Content: {page_content}\n\n"
+        # Add main content (heavily truncated to save tokens)
+        main_content = website_data['main_content']
+        # Only use first part of main content if we have about content
+        main_length = max_length - len(about_content)
+        if main_length > 0:
+            if len(main_content) > main_length:
+                content += f"Main Content (truncated): {main_content[:main_length]}...\n\n"
+            else:
+                content += f"Main Content: {main_content}\n\n"
+        
+        # Add about page content if available
+        if about_content:
+            content += f"About Page Content: {about_content}\n\n"
+            
+        # Skip other pages if SCRAPE_IMPORTANT_PAGES_ONLY is True
+        if os.environ.get('SCRAPE_IMPORTANT_PAGES_ONLY', 'True').lower() != 'true':
+            # Add other important pages content (limited)
+            for page_type, page_data in website_data.get('important_pages', {}).items():
+                # Skip about page as we've already added it
+                if page_type == 'about' or 'error' in page_data:
+                    continue
+                    
+                page_content = page_data.get('content', '')
+                if page_content:
+                    # Very short snippet
+                    snippet = page_content[:300] + "..."
+                    content += f"{page_type.capitalize()} Page: {snippet}\n\n"
         
         return content
     
@@ -92,28 +113,32 @@ class ContentAnalyzer:
             return self._analyze_without_llm(content)
     
     def _analyze_with_ollama(self, content):
-        """Use Ollama for local LLM analysis"""
+        """Use Ollama for local LLM analysis - optimized for lightweight models"""
         try:
-            # Prepare the prompt for company analysis
+            # Prepare a more concise prompt to reduce token usage
             prompt = f"""
-            Analyze the following website content and extract key information about the company.
+            Analyze this website content and extract company information.
             
             {content}
             
-            Please provide the following information in a structured format:
-            1. Company Type: (B2B, B2C, Government, Non-profit, etc.)
-            2. Industry: (Technology, Healthcare, Finance, Education, etc.)
-            3. Target Market: (Who are their customers/clients?)
-            4. Products/Services: (What do they offer?)
-            5. Key Decision Maker Roles: (What job titles would likely make purchasing decisions?)
-            6. Company Size Estimate: (Small, Medium, Large)
-            7. Potential Pain Points: (What problems might they be trying to solve?)
+            Extract and return ONLY these fields in JSON format:
+            - company_type: B2B, B2C, Government, or Non-profit
+            - industry: Main industry
+            - target_market: Target customers
+            - offerings: List of main products/services
+            - decision_maker_roles: List of 2-3 job titles who would make purchasing decisions
+            - company_size: Small, Medium, or Large
+            - pain_points: Main challenges they might face
             
-            Format your response as JSON with these exact keys: company_type, industry, target_market, offerings, decision_maker_roles, company_size, pain_points
+            Return ONLY valid JSON with these exact keys.
             """
             
-            # Call Ollama
-            response = ollama.generate(model=self.model_name, prompt=prompt)
+            # Call Ollama with reduced output length
+            response = ollama.generate(
+                model=self.model_name, 
+                prompt=prompt,
+                options={"num_predict": 800}  # Limit output size to save resources
+            )
             
             # Extract JSON from response
             json_match = re.search(r'```json\s*(.*?)\s*```', response['response'], re.DOTALL)
@@ -215,7 +240,7 @@ class ContentAnalyzer:
                 offerings.append(match.strip())
         
         # Look for list items that might be services
-        list_items = re.findall(r'[•*-]\s+([^•*-\n]+)', content)
+        list_items = re.findall(r'[•*\-]\s+([^•*\-\n]+)', content)
         for item in list_items:
             if 10 < len(item) < 100:
                 offerings.append(item.strip())
