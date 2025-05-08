@@ -21,6 +21,7 @@ class ContentAnalyzer:
         self.model_name = model_name
         self.use_cache = use_cache
         self.cache_expiry = cache_expiry
+        self.company_analysis = {}
         
         # Check if we can use the local LLM
         if self.use_local_llm and ollama is None:
@@ -42,6 +43,9 @@ class ContentAnalyzer:
         
         # Use LLM to analyze content
         analysis_result = self._analyze_with_llm(content_to_analyze)
+        
+        # Store the analysis for other methods to use
+        self.company_analysis = analysis_result
         
         # Add timestamp for cache management
         analysis_result['timestamp'] = datetime.now().isoformat()
@@ -93,175 +97,169 @@ class ContentAnalyzer:
             # Add other important pages content (limited)
             for page_type, page_data in website_data.get('important_pages', {}).items():
                 # Skip about page as we've already added it
-                if page_type == 'about' or 'error' in page_data:
+                if page_type == 'about' or 'error' in page_data or 'content' not in page_data:
                     continue
-                    
-                page_content = page_data.get('content', '')
-                if page_content:
-                    # Very short snippet
-                    snippet = page_content[:300] + "..."
-                    content += f"{page_type.capitalize()} Page: {snippet}\n\n"
+                
+                page_content = page_data['content']
+                if len(page_content) > 500:  # Limit to 500 chars per page
+                    page_content = page_content[:500] + "..."
+                
+                content += f"{page_type.title()} Page Content: {page_content}\n\n"
         
         return content
     
     def _analyze_with_llm(self, content):
         """Use LLM to analyze the content"""
-        if self.use_local_llm and ollama is not None:
+        if self.use_local_llm:
             return self._analyze_with_ollama(content)
         else:
-            # Fallback to a simple rule-based analysis if no LLM is available
             return self._analyze_without_llm(content)
     
     def _analyze_with_ollama(self, content):
         """Use Ollama for local LLM analysis - optimized for lightweight models"""
         try:
-            # First, perform a focused analysis on key business attributes
-            business_prompt = f"""
-            Analyze this website content and extract detailed business information.
+            # Create a prompt that will generate structured output
+            system_prompt = """You are an AI assistant that analyzes company websites and extracts structured information.
+            Analyze the provided website content and extract the following information:
+            - company_type: Whether the company is B2B, B2C, Government, or Non-profit
+            - industry: The industry the company operates in (Technology, Healthcare, Finance, Education, Manufacturing, Retail, Consulting, etc.)
+            - company_size: Estimated size (Small, Medium, Large)
+            - target_market: Who the company sells to or serves
+            - offerings: List of main products or services the company provides
+            - pain_points: List of customer pain points the company addresses
             
-            {content}
-            
-            Focus on these THREE specific areas with detailed analysis:
-            
-            1. COMPANY SIZE: Analyze employee count, office locations, revenue indicators, client size, etc.
-               Classify as Small (1-50 employees), Medium (51-500), or Large (500+).
-               Provide specific evidence from the content.
-            
-            2. TARGET MARKET: Who exactly are their ideal customers? Be specific about:
-               - Industries they target
-               - Company sizes they serve
-               - Geographic regions they focus on
-               - Specific roles or departments they sell to
-            
-            3. OFFERINGS: What specific products/services do they provide?
-               - List main product/service categories
-               - Identify their flagship or primary offerings
-               - Note any specialized or unique offerings
-            
-            Format your response as JSON with these keys: company_size, target_market, offerings
-            For target_market and offerings, provide arrays with specific items, not just general descriptions.
+            Return your analysis as a JSON object with these fields. If you cannot determine a value with confidence, use "Unknown" for that field.
             """
             
-            # Call Ollama for the focused business analysis
-            business_response = ollama.generate(
-                model=self.model_name, 
-                prompt=business_prompt,
-                options={"num_predict": 1000}
+            # Prepare the prompt with the content
+            prompt = f"{system_prompt}\n\nWebsite Content to Analyze:\n{content}"
+            
+            # Call Ollama with the prompt
+            response = ollama.chat(
+                model=self.model_name,
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': system_prompt
+                    },
+                    {
+                        'role': 'user',
+                        'content': f"Website Content to Analyze:\n{content}"
+                    }
+                ],
+                options={
+                    'temperature': 0.2,  # Low temperature for more factual responses
+                    'num_predict': 2048  # Limit token generation
+                }
             )
             
-            # Now get the general company information with a separate prompt
-            general_prompt = f"""
-            Analyze this website content and extract basic company information.
+            # Extract the response text
+            response_text = response['message']['content']
             
-            {content}
+            # Try to extract JSON from the response
+            result = self._extract_json_from_response(response_text)
             
-            Extract and return ONLY these fields in JSON format:
-            - company_type: B2B, B2C, Government, or Non-profit
-            - industry: Main industry
-            - decision_maker_roles: List of 2-3 job titles who would make purchasing decisions
-            - pain_points: Main challenges they might face
+            # Process the result to ensure all required fields are present
+            processed_result = self._process_llm_response(result)
             
-            Return ONLY valid JSON with these exact keys.
-            """
+            return processed_result
             
-            # Call Ollama for the general company information
-            general_response = ollama.generate(
-                model=self.model_name, 
-                prompt=general_prompt,
-                options={"num_predict": 800}
-            )
-            
-            # Combine the responses
-            business_data = self._extract_json_from_response(business_response['response'])
-            general_data = self._extract_json_from_response(general_response['response'])
-            
-            # Create a combined response
-            response = {'response': json.dumps({**general_data, **business_data})}
-            
-            # Process the combined response
-            return self._process_llm_response(response)
         except Exception as e:
-            print(f"Error in Ollama analysis: {str(e)}")
+            print(f"Error using Ollama: {str(e)}")
+            # Fall back to rule-based analysis
             return self._analyze_without_llm(content)
-                
+    
     def _extract_json_from_response(self, text):
         """Extract JSON from LLM response"""
-        # Try to find JSON with markdown formatting
-        json_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(1)
-        else:
-            # Try to find JSON without markdown formatting
-            json_match = re.search(r'(\{.*\})', text, re.DOTALL)
+        try:
+            # Try to find JSON in the response
+            json_match = re.search(r'```(?:json)?\s*({[\s\S]*?})\s*```', text)
             if json_match:
                 json_str = json_match.group(1)
-            else:
-                json_str = text
-        
-        # Remove any non-JSON text before or after the JSON object
-        json_str = re.sub(r'^[^{]*', '', json_str)
-        json_str = re.sub(r'[^}]*$', '', json_str)
-        
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
+                return json.loads(json_str)
+            
+            # If no JSON in code blocks, try to find JSON directly
+            json_match = re.search(r'({[\s\S]*})', text)
+            if json_match:
+                json_str = json_match.group(1)
+                return json.loads(json_str)
+            
+            # If still no JSON, try to parse the entire response
+            return json.loads(text)
+        except Exception as e:
+            print(f"Error extracting JSON: {str(e)}")
+            # Return empty dict if we can't parse JSON
             return {}
     
     def _process_llm_response(self, response):
         """Process the LLM response and ensure all required fields are present"""
-        try:
-            # Extract JSON from response
-            if isinstance(response, dict) and 'response' in response:
-                result = json.loads(response['response'])
-            else:
-                result = self._extract_json_from_response(response)
+        # Define required fields with default values
+        required_fields = {
+            'company_type': 'Unknown',
+            'industry': 'Unknown',
+            'company_size': 'Unknown',
+            'target_market': 'Unknown',
+            'offerings': [],
+            'pain_points': []
+        }
+        
+        # Ensure all required fields are present
+        for field, default_value in required_fields.items():
+            if field not in response or not response[field]:
+                response[field] = default_value
             
-            # Ensure all expected keys are present
-            expected_keys = ['company_type', 'industry', 'target_market', 'offerings', 
-                            'decision_maker_roles', 'company_size', 'pain_points']
-            
-            for key in expected_keys:
-                if key not in result:
-                    result[key] = "Not identified"
-                
-            return result
-        except json.JSONDecodeError:
-            print("Failed to parse JSON from LLM response. Falling back to rule-based analysis.")
-            return self._analyze_without_llm(content)
-        except Exception as e:
-            print(f"Error using Ollama: {str(e)}")
-            return self._analyze_without_llm(content)
+            # Ensure lists are actually lists
+            if field in ['offerings', 'pain_points', 'target_market'] and isinstance(response[field], str):
+                response[field] = [response[field]]
+        
+        return response
     
     def _analyze_without_llm(self, content):
         """Simple rule-based analysis as fallback"""
-        # This is a very basic fallback if LLM is not available
-        result = {
+        # Create a basic analysis using rule-based methods
+        analysis = {
             'company_type': self._guess_company_type(content),
             'industry': self._guess_industry(content),
+            'company_size': self._guess_company_size(content),
             'target_market': self._guess_target_market(content),
             'offerings': self._extract_offerings(content),
-            'decision_maker_roles': self._guess_decision_makers(content),
-            'company_size': self._guess_company_size(content),
             'pain_points': self._guess_pain_points(content)
         }
         
-        return result
-        
+        return analysis
+    
     def _guess_company_type(self, content):
         """Simple rule-based company type detection"""
         content = content.lower()
         
-        if re.search(r'\b(b2b|business.{1,10}business|enterprise.{1,10}solution)\b', content):
-            return "B2B"
-        elif re.search(r'\b(b2c|consumer|retail|shop|store)\b', content):
-            return "B2C"
-        elif re.search(r'\b(government|federal|agency|public sector)\b', content):
-            return "Government"
-        elif re.search(r'\b(non.?profit|ngo|charity|foundation)\b', content):
-            return "Non-profit"
-        else:
-            return "Unknown"
-            
+        # Look for B2B indicators
+        b2b_indicators = ['business', 'enterprise', 'organization', 'company', 'client', 'solution']
+        b2b_count = sum(content.count(indicator) for indicator in b2b_indicators)
+        
+        # Look for B2C indicators
+        b2c_indicators = ['consumer', 'customer', 'individual', 'personal', 'user', 'people']
+        b2c_count = sum(content.count(indicator) for indicator in b2c_indicators)
+        
+        # Look for government indicators
+        gov_indicators = ['government', 'public sector', 'agency', 'federal', 'state', 'municipal']
+        gov_count = sum(content.count(indicator) for indicator in gov_indicators)
+        
+        # Look for non-profit indicators
+        npo_indicators = ['non-profit', 'nonprofit', 'charity', 'foundation', 'community', 'donation']
+        npo_count = sum(content.count(indicator) for indicator in npo_indicators)
+        
+        # Determine the most likely type
+        counts = {
+            'B2B': b2b_count,
+            'B2C': b2c_count,
+            'Government': gov_count,
+            'Non-profit': npo_count
+        }
+        
+        # Return the type with the highest count, or Unknown if all are 0
+        max_type = max(counts.items(), key=lambda x: x[1])
+        return max_type[0] if max_type[1] > 0 else "Unknown"
+    
     def _guess_industry(self, content):
         """Simple rule-based industry detection"""
         content = content.lower()
@@ -282,17 +280,112 @@ class ContentAnalyzer:
                     return industry
         
         return "Unknown"
-        
+    
     def _extract_offerings(self, content):
-        """Extract potential offerings from content"""
-        # This is a very basic extraction and would be much better with LLM
+        """Extract the company's offerings (products/services) with improved detection"""
+        if not content:
+            return ["Unknown - LLM analysis required"]
+        
+        # Enhanced prompt for better offerings detection
+        offerings_prompt = (
+            "Analyze the following website content and identify the specific products or services offered by this company. "
+            "Focus on finding concrete offerings rather than general capabilities. "
+            "Look for sections like 'Products', 'Services', 'Solutions', or 'What We Offer'. "
+            "Return a comma-separated list of 3-6 specific offerings (e.g., 'Cloud Storage, AI Consulting, Data Analytics'). "
+            "Be as specific as possible with each offering. "
+            "If you can't determine the offerings with confidence, respond with 'Unknown':\n\n"
+            f"{content[:4000]}"
+        )
+        
+        try:
+            if self.use_local_llm:
+                offerings_text = self._analyze_with_ollama(offerings_prompt)
+                if isinstance(offerings_text, dict) and 'offerings' in offerings_text:
+                    offerings = offerings_text['offerings']
+                    if isinstance(offerings, list):
+                        return offerings
+                    elif isinstance(offerings, str):
+                        return [item.strip() for item in offerings.split(',') if item.strip()]
+                    
+                # Fallback to pattern matching
+                offerings_text = self._extract_offerings_with_patterns(content)
+            else:
+                # Fallback to pattern matching if LLM is not available
+                offerings_text = self._extract_offerings_with_patterns(content)
+            
+            if offerings_text and offerings_text.lower() != "unknown":
+                # Split by commas and clean up
+                offerings = [item.strip() for item in offerings_text.split(',') if item.strip()]
+                
+                # Filter out generic or vague offerings
+                filtered_offerings = []
+                for offering in offerings:
+                    # Skip very short or generic offerings
+                    if len(offering) < 4 or offering.lower() in ['services', 'products', 'solutions']:
+                        continue
+                    filtered_offerings.append(offering)
+                
+                return filtered_offerings if filtered_offerings else self._infer_offerings_from_industry()
+            else:
+                return self._infer_offerings_from_industry()
+        except Exception as e:
+            print(f"Error extracting offerings: {e}")
+            return self._infer_offerings_from_industry()
+    
+    def _extract_offerings_with_patterns(self, content):
+        """Extract offerings using pattern matching as a fallback method"""
+        # Look for common patterns that indicate offerings
         offerings = []
         
-        # Look for common offering patterns
-        service_matches = re.findall(r'(?:offer|provide|deliver)s?\s+([^.!?;]+)', content, re.I)
-        for match in service_matches:
-            if 10 < len(match) < 100:  # Filter out very short or long matches
-                offerings.append(match.strip())
+        # Pattern 1: Look for bullet points after headings like "Our Services"
+        service_sections = re.findall(r'(?:Our|Key|Main)\s+(?:Services|Products|Solutions|Offerings)(?:[:\s]*)([^#]+?)(?:\n\n|$)', content, re.IGNORECASE)
+        for section in service_sections:
+            # Look for bullet points or numbered lists
+            items = re.findall(r'(?:•|\*|\-|\d+\.)\s*([^\n•\*\-\d]+)', section)
+            if items:
+                offerings.extend([item.strip() for item in items if len(item.strip()) > 3][:6])  # Limit to 6 items
+        
+        # Pattern 2: Look for "We provide" or "We offer" statements
+        offer_statements = re.findall(r'(?:We|Our company)\s+(?:provide|offer|deliver|specialize in)\s+([^.]+)', content, re.IGNORECASE)
+        for statement in offer_statements:
+            # Split by "and" or commas
+            parts = re.split(r'\s+and\s+|,\s*', statement)
+            offerings.extend([part.strip() for part in parts if len(part.strip()) > 3][:6])  # Limit to 6 items
+        
+        # Deduplicate and limit
+        unique_offerings = list(dict.fromkeys([o for o in offerings if o]))
+        
+        if unique_offerings:
+            return ", ".join(unique_offerings[:6])  # Return top 6 offerings
+        else:
+            return "Unknown"
+    
+    def _infer_offerings_from_industry(self):
+        """Infer potential offerings based on detected industry and company type"""
+        industry = self.company_analysis.get('industry', 'Unknown')
+        company_type = self.company_analysis.get('company_type', 'B2B')
+        
+        industry_offerings = {
+            'Technology': ['Software Development', 'IT Consulting', 'Cloud Services', 'Data Analytics', 'Cybersecurity'],
+            'Healthcare': ['Medical Services', 'Healthcare IT', 'Patient Management', 'Medical Equipment', 'Telehealth'],
+            'Finance': ['Financial Services', 'Investment Management', 'Banking Solutions', 'Insurance', 'Payment Processing'],
+            'Education': ['Educational Content', 'Learning Management', 'Student Services', 'Educational Technology', 'Training Programs'],
+            'Manufacturing': ['Production Services', 'Supply Chain Management', 'Quality Control', 'Equipment Manufacturing', 'Industrial Design'],
+            'Retail': ['E-commerce Solutions', 'Inventory Management', 'Customer Experience', 'Point of Sale Systems', 'Retail Analytics'],
+            'Consulting': ['Business Strategy', 'Management Consulting', 'Process Improvement', 'Change Management', 'Industry Expertise']
+        }
+        
+        if industry in industry_offerings:
+            # Return the top 3 most relevant offerings for this industry
+            return industry_offerings[industry][:3]
+        else:
+            # Generic offerings based on company type
+            if company_type == 'B2B':
+                return ['Business Services', 'Professional Solutions', 'Enterprise Software']
+            elif company_type == 'B2C':
+                return ['Consumer Products', 'Customer Services', 'Retail Solutions']
+            else:
+                return ['Professional Services', 'Industry Solutions', 'Specialized Expertise']
     
     def _guess_company_size(self, content):
         """Guess the company size from content"""
@@ -325,8 +418,8 @@ class ContentAnalyzer:
             else:
                 return "Large"
         
-        return "Unknown - LLM analysis required"
-        
+        return "Medium"  # Default to Medium if unknown
+    
     def _guess_target_market(self, content):
         """Guess the target market from content"""
         target_markets = []
@@ -354,7 +447,7 @@ class ContentAnalyzer:
         
         # Return results or default
         return target_markets if target_markets else ["Unknown - LLM analysis required"]
-        
+    
     def _guess_pain_points(self, content):
         """Guess potential pain points from content"""
         pain_points = []
@@ -373,49 +466,9 @@ class ContentAnalyzer:
                 if 10 < len(match) < 100:  # Filter out very short or long matches
                     pain_points.append(match.strip())
         
-        # Return results or default
-        return pain_points if pain_points else ["Unknown - LLM analysis required"]
-        
-        # Look for list items that might be services
-        list_items = re.findall(r'[•*\-]\s+([^•*\-\n]+)', content)
-        for item in list_items:
-            if 10 < len(item) < 100:
-                offerings.append(item.strip())
-        
         # Deduplicate and limit
-        unique_offerings = list(set(offerings))
-        return unique_offerings[:5] if unique_offerings else ["Unknown - LLM analysis required"]
-    
-    def _guess_decision_makers(self, content):
-        """Guess potential decision maker roles"""
-        content = content.lower()
-        
-        common_roles = {
-            'Technology': ['CTO', 'CIO', 'IT Director', 'VP of Engineering', 'Technical Director'],
-            'Marketing': ['CMO', 'Marketing Director', 'Brand Manager', 'Digital Marketing Manager'],
-            'Finance': ['CFO', 'Finance Director', 'Controller', 'Accounting Manager'],
-            'Operations': ['COO', 'Operations Director', 'VP of Operations', 'Facility Manager'],
-            'Human Resources': ['CHRO', 'HR Director', 'Talent Acquisition Manager', 'People Operations'],
-            'Executive': ['CEO', 'President', 'Owner', 'Founder', 'Managing Director']
-        }
-        
-        # Determine which department the content most relates to
-        department_scores = {}
-        for dept in common_roles.keys():
-            department_scores[dept] = content.count(dept.lower())
-        
-        # Add the executive department as it's always relevant
-        department_scores['Executive'] = 1
-        
-        # Get top 2 departments
-        top_departments = sorted(department_scores.items(), key=lambda x: x[1], reverse=True)[:2]
-        
-        # Get roles from top departments
-        roles = []
-        for dept, _ in top_departments:
-            roles.extend(common_roles[dept][:3])  # Take top 3 roles from each department
-        
-        return roles
+        unique_pain_points = list(dict.fromkeys([p for p in pain_points if p]))
+        return unique_pain_points[:5] if unique_pain_points else ["Unknown - LLM analysis required"]
     
     def _check_cache(self, cache_key):
         """Check if we have a valid cache for this analysis"""
@@ -453,13 +506,13 @@ class ContentAnalyzer:
             print(f"Error writing to cache: {str(e)}")
 
 # Function to be imported by other modules
-def analyze_company(website_data):
+def analyze_company(website_data, use_cache=True):
     """Analyze website data and extract company information"""
     # Get settings from environment variables or use defaults
     use_local_llm = os.environ.get('USE_LOCAL_LLM', 'True').lower() == 'true'
     model_name = os.environ.get('LLM_MODEL', 'phi3')
     
-    analyzer = ContentAnalyzer(use_local_llm=use_local_llm, model_name=model_name)
+    analyzer = ContentAnalyzer(use_local_llm=use_local_llm, model_name=model_name, use_cache=use_cache)
     return analyzer.analyze_company(website_data)
 
 # For testing

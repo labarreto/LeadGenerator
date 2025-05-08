@@ -17,6 +17,23 @@ app.config['SESSION_TYPE'] = 'filesystem'
 os.makedirs('data/results', exist_ok=True)
 os.makedirs('data/cache', exist_ok=True)
 
+# Clear cache for testing new features
+def clear_cache():
+    """Clear the cache directories to test new features"""
+    try:
+        cache_dirs = ['data/cache/analysis', 'data/cache/leads', 'data/cache/scrape']
+        for cache_dir in cache_dirs:
+            if os.path.exists(cache_dir):
+                for cache_file in os.listdir(cache_dir):
+                    os.remove(os.path.join(cache_dir, cache_file))
+                print(f"Cleared cache in {cache_dir}")
+    except Exception as e:
+        print(f"Error clearing cache: {e}")
+
+# Clear cache when app starts in debug mode
+if os.environ.get('FLASK_ENV') == 'development' or os.environ.get('FLASK_DEBUG') == '1':
+    clear_cache()
+
 @app.route('/')
 def index():
     """Render the main page"""
@@ -26,6 +43,7 @@ def index():
 def analyze():
     """Process a website URL and generate leads"""
     url = request.form.get('url', '')
+    force_refresh = request.form.get('force_refresh', 'false').lower() == 'true'
     
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
@@ -34,14 +52,18 @@ def analyze():
     url = clean_url(url)
     
     try:
-        # Step 1: Scrape the website
-        website_data = scrape_website(url)
+        # Set environment variables for testing
+        os.environ['USE_LOCAL_LLM'] = 'True'
+        os.environ['FIND_EXTERNAL_LEADS'] = 'True'
         
-        # Step 2: Analyze the company
-        company_analysis = analyze_company(website_data)
+        # Step 1: Scrape the website (force refresh if requested)
+        website_data = scrape_website(url, use_cache=not force_refresh)
         
-        # Step 3: Generate leads
-        leads = generate_leads(company_analysis, url)
+        # Step 2: Analyze the company (force refresh if requested)
+        company_analysis = analyze_company(website_data, use_cache=not force_refresh)
+        
+        # Step 3: Generate leads (force refresh if requested)
+        leads = generate_leads(company_analysis, url, use_cache=not force_refresh)
         
         # Format the results
         results = format_results(url, company_analysis, leads)

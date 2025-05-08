@@ -52,71 +52,12 @@
             </div>
         </div>
 
-        <!-- Internal Leads -->
-        <div class="row mb-4">
-            <div class="col-md-12">
-                <div class="card shadow">
-                    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-                        <h3 class="card-title mb-0">Internal Decision Makers</h3>
-                        <div class="export-buttons">
-                            <a href="/export/json" class="btn btn-sm btn-light me-2">Export JSON</a>
-                            <a href="/export/csv" class="btn btn-sm btn-light">Export CSV</a>
-                        </div>
-                    </div>
-                    <div class="card-body p-0">
-                        <div class="table-responsive">
-                            <table class="table table-hover mb-0">
-                                <thead class="table-light">
-                                    <tr>
-                                        <th>Name</th>
-                                        <th>Role</th>
-                                        <th>Email</th>
-                                        <th>Confidence</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for lead in results.leads if lead.lead_type == 'internal' %}
-                                    <tr>
-                                        <td>{{ lead.name }}</td>
-                                        <td>{{ lead.role }}</td>
-                                        <td>{{ lead.email }}</td>
-                                        <td>
-                                            <div class="progress" style="height: 20px;">
-                                                <div class="progress-bar {% if lead.confidence_score >= 70 %}bg-success{% elif lead.confidence_score >= 40 %}bg-warning{% else %}bg-danger{% endif %}" 
-                                                     role="progressbar" 
-                                                     style="width: {{ lead.confidence_score }}%;" 
-                                                     aria-valuenow="{{ lead.confidence_score }}" 
-                                                     aria-valuemin="0" 
-                                                     aria-valuemax="100">{{ lead.confidence_score }}%</div>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <button class="btn btn-sm btn-outline-primary view-suggestions" 
-                                                    data-bs-toggle="modal" 
-                                                    data-bs-target="#suggestionsModal" 
-                                                    data-name="{{ lead.name }}" 
-                                                    data-role="{{ lead.role }}"
-                                                    data-suggestions="{{ lead.outreach_suggestions|tojson }}">
-                                                Outreach Tips
-                                            </button>
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- External Leads -->
         <div class="row mb-4">
             <div class="col-md-12">
                 <div class="card shadow">
-                    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-                        <h3 class="card-title mb-0">External Decision Makers</h3>
+                    <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                        <h3 class="card-title mb-0">Potential External Leads</h3>
                         <div class="export-buttons">
                             <a href="/export/json" class="btn btn-sm btn-light me-2">Export JSON</a>
                             <a href="/export/csv" class="btn btn-sm btn-light">Export CSV</a>
@@ -131,35 +72,73 @@
                                         <th>Company</th>
                                         <th>Role</th>
                                         <th>Email</th>
-                                        <th>Potential Interest</th>
+                                        <th>Match Score</th>
+                                        <th>Potential Value</th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {% for lead in results.leads if lead.lead_type == 'external' %}
+                                    {% for lead in results.leads %}
                                     <tr>
                                         <td>{{ lead.name }}</td>
-                                        <td>{{ lead.company_name }}</td>
+                                        <td>
+                                            {% if lead.company_name is defined and lead.company_name %}
+                                                <strong>{{ lead.company_name }}</strong>
+                                            {% else %}
+                                                <strong>Unknown Company</strong>
+                                            {% endif %}
+                                            
+                                            {% if lead.industry is defined and lead.industry %}
+                                                <div class="small text-muted">{{ lead.industry }}</div>
+                                            {% endif %}
+                                            
+                                            {% if lead.company_size is defined and lead.company_size %}
+                                                <div class="small text-muted">{{ lead.company_size }}</div>
+                                            {% endif %}
+                                        </td>
                                         <td>{{ lead.role }}</td>
                                         <td>{{ lead.email }}</td>
-                                        <td><small class="text-muted">{{ lead.target_reason }}</small></td>
                                         <td>
-                                            <div class="progress" style="height: 20px;">
-                                                <div class="progress-bar {% if lead.confidence_score >= 70 %}bg-success{% elif lead.confidence_score >= 40 %}bg-warning{% else %}bg-danger{% endif %}" 
-                                                     role="progressbar" 
-                                                     style="width: {{ lead.confidence_score }}%;" 
-                                                     aria-valuenow="{{ lead.confidence_score }}" 
-                                                     aria-valuemin="0" 
-                                                     aria-valuemax="100">{{ lead.confidence_score }}%</div>
+                                            <div class="progress" style="height: 8px;">
+                                                {% if lead.match_score is defined and lead.match_score %}
+                                                    {% if lead.match_score >= 80 %}
+                                                        <div class="progress-bar bg-success" role="progressbar" style="width: {{ lead.match_score }}%;" aria-valuenow="{{ lead.match_score }}" aria-valuemin="0" aria-valuemax="100"></div>
+                                                    {% elif lead.match_score >= 60 %}
+                                                        <div class="progress-bar bg-info" role="progressbar" style="width: {{ lead.match_score }}%;" aria-valuenow="{{ lead.match_score }}" aria-valuemin="0" aria-valuemax="100"></div>
+                                                    {% else %}
+                                                        <div class="progress-bar bg-warning" role="progressbar" style="width: {{ lead.match_score }}%;" aria-valuenow="{{ lead.match_score }}" aria-valuemin="0" aria-valuemax="100"></div>
+                                                    {% endif %}
+                                                    <div class="small text-center mt-1">{{ lead.match_percentage|default(lead.match_score ~ '%') }}</div>
+                                                {% else %}
+                                                    <div class="progress-bar bg-secondary" role="progressbar" style="width: 50%;" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">N/A</div>
+                                                {% endif %}
                                             </div>
+                                        </td>
+                                        <td>
+                                            {% if lead.potential_value is defined and lead.potential_value %}
+                                                {% if lead.potential_value == "High" %}
+                                                <span class="badge bg-success">High</span>
+                                                {% elif lead.potential_value == "Medium" %}
+                                                <span class="badge bg-info">Medium</span>
+                                                {% else %}
+                                                <span class="badge bg-warning">Low</span>
+                                                {% endif %}
+                                            {% else %}
+                                                <span class="badge bg-secondary">Unknown</span>
+                                            {% endif %}
                                         </td>
                                         <td>
                                             <button class="btn btn-sm btn-outline-primary view-suggestions" 
                                                     data-bs-toggle="modal" 
-                                                    data-bs-target="#suggestionsModal" 
-                                                    data-name="{{ lead.name }}" 
+                                                    data-bs-target="#outreachModal"
+                                                    data-name="{{ lead.name }}"
                                                     data-role="{{ lead.role }}"
-                                                    data-suggestions="{{ lead.outreach_suggestions|tojson }}">
+                                                    data-company="{{ lead.company_name }}"
+                                                    data-industry="{{ lead.industry }}"
+                                                    data-reason="{{ lead.target_reason }}"
+                                                    data-match-score="{{ lead.match_score }}"
+                                                    data-potential-value="{{ lead.potential_value }}"
+                                                    data-suggestions='{{ lead.outreach_suggestions|tojson }}'>
                                                 Outreach Tips
                                             </button>
                                         </td>
@@ -189,21 +168,50 @@
         </div>
 
         <!-- Suggestions Modal -->
-        <div class="modal fade" id="suggestionsModal" tabindex="-1" aria-labelledby="suggestionsModalLabel" aria-hidden="true">
-            <div class="modal-dialog">
+        <div class="modal fade" id="outreachModal" tabindex="-1" aria-labelledby="outreachModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title" id="suggestionsModalLabel">Outreach Suggestions</h5>
+                        <h5 class="modal-title" id="outreachModalLabel">Outreach Suggestions</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
-                        <h4 id="modal-lead-name"></h4>
-                        <p id="modal-lead-role" class="text-muted"></p>
+                        <div class="row mb-3">
+                            <div class="col-md-8">
+                                <h4 id="modal-lead-name"></h4>
+                                <p id="modal-lead-role" class="text-muted mb-1"></p>
+                                <p id="modal-lead-company" class="text-muted mb-1"></p>
+                                <p id="modal-lead-industry" class="text-muted mb-0"></p>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <div class="match-score-display">
+                                    <div class="d-flex align-items-center justify-content-end">
+                                        <span class="me-2">Match Score:</span>
+                                        <span id="modal-match-score" class="badge bg-success fs-6">85%</span>
+                                    </div>
+                                    <div class="small text-muted mt-1" id="modal-potential-value">High Potential Value</div>
+                                </div>
+                            </div>
+                        </div>
                         <hr>
-                        <h5>Suggested Outreach Approach:</h5>
-                        <ul id="suggestions-list">
-                            <!-- Suggestions will be populated here -->
-                        </ul>
+                        <div class="card mb-3" id="reason-card">
+                            <div class="card-header bg-light">
+                                <h5 class="mb-0">Why This Lead Might Be Interested</h5>
+                            </div>
+                            <div class="card-body">
+                                <p id="modal-lead-reason" class="mb-0"></p>
+                            </div>
+                        </div>
+                        <div class="card mb-3">
+                            <div class="card-header bg-light">
+                                <h5 class="mb-0">Suggested Outreach Approach</h5>
+                            </div>
+                            <div class="card-body">
+                                <ul id="suggestions-list" class="mb-0">
+                                    <!-- Suggestions will be populated here -->
+                                </ul>
+                            </div>
+                        </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -229,22 +237,66 @@
             
             viewSuggestionButtons.forEach(button => {
                 button.addEventListener('click', function() {
-                    const name = this.getAttribute('data-name');
-                    const role = this.getAttribute('data-role');
-                    const suggestions = JSON.parse(this.getAttribute('data-suggestions'));
+                    // Get lead data from data attributes
+                    const name = this.getAttribute('data-name') || 'Unknown';
+                    const role = this.getAttribute('data-role') || 'Unknown Role';
+                    const company = this.getAttribute('data-company') || 'Unknown Company';
+                    const industry = this.getAttribute('data-industry') || '';
+                    const reason = this.getAttribute('data-reason') || '';
+                    const matchScore = this.getAttribute('data-match-score') || '0';
+                    const potentialValue = this.getAttribute('data-potential-value') || 'Unknown';
+                    const suggestions = JSON.parse(this.getAttribute('data-suggestions') || '[]');
                     
+                    // Populate basic lead information
                     document.getElementById('modal-lead-name').textContent = name;
                     document.getElementById('modal-lead-role').textContent = role;
+                    document.getElementById('modal-lead-company').textContent = company;
+                    document.getElementById('modal-lead-industry').textContent = industry;
                     
+                    // Set match score with appropriate color
+                    const scoreElement = document.getElementById('modal-match-score');
+                    scoreElement.textContent = matchScore + '%';
+                    
+                    // Set badge color based on score
+                    scoreElement.className = 'badge fs-6';
+                    if (parseInt(matchScore) >= 80) {
+                        scoreElement.classList.add('bg-success');
+                    } else if (parseInt(matchScore) >= 60) {
+                        scoreElement.classList.add('bg-info');
+                    } else {
+                        scoreElement.classList.add('bg-warning');
+                    }
+                    
+                    // Set potential value
+                    const valueElement = document.getElementById('modal-potential-value');
+                    valueElement.textContent = potentialValue + ' Potential Value';
+                    
+                    // Handle reason section
+                    const reasonCard = document.getElementById('reason-card');
+                    if (reason) {
+                        reasonCard.style.display = 'block';
+                        document.getElementById('modal-lead-reason').textContent = reason;
+                    } else {
+                        reasonCard.style.display = 'none';
+                    }
+                    
+                    // Populate suggestions list
                     const suggestionsList = document.getElementById('suggestions-list');
                     suggestionsList.innerHTML = '';
                     
-                    suggestions.forEach(suggestion => {
+                    if (suggestions && suggestions.length > 0) {
+                        suggestions.forEach(suggestion => {
+                            const li = document.createElement('li');
+                            li.className = 'mb-2';
+                            li.textContent = suggestion;
+                            suggestionsList.appendChild(li);
+                        });
+                    } else {
                         const li = document.createElement('li');
                         li.className = 'mb-2';
-                        li.textContent = suggestion;
+                        li.textContent = 'No specific suggestions available for this lead.';
                         suggestionsList.appendChild(li);
-                    });
+                    }
                 });
             });
         });
