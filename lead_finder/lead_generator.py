@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import random
 from datetime import datetime
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -9,10 +10,11 @@ from utils.helpers import get_cache_path
 class LeadGenerator:
     """Class to identify potential leads and their contact information"""
     
-    def __init__(self, use_cache=True, cache_expiry=86400):
+    def __init__(self, use_cache=True, cache_expiry=86400, find_external_leads=True):
         """Initialize the lead generator with caching options"""
         self.use_cache = use_cache
         self.cache_expiry = cache_expiry
+        self.find_external_leads = find_external_leads
         
         # Common email patterns for different companies
         self.email_patterns = [
@@ -23,6 +25,28 @@ class LeadGenerator:
             "{first_initial}.{last}@{domain}",
             "{first}{last_initial}@{domain}"
         ]
+        
+        # External company domains by industry
+        self.industry_domains = {
+            'Technology': ['techcorp.com', 'innovatetech.io', 'nextsoftware.com', 'cloudservices.net', 'datatech.ai'],
+            'Healthcare': ['healthsolutions.org', 'medicalgroup.com', 'careproviders.net', 'healthtech.io', 'medicalservices.com'],
+            'Finance': ['financialgroup.com', 'investmentfirm.com', 'bankingsolutions.net', 'wealthmanagement.com', 'fintech.io'],
+            'Education': ['learningsolutions.org', 'educationgroup.com', 'academicservices.net', 'trainingpro.com', 'edtech.io'],
+            'Manufacturing': ['industrialsolutions.com', 'manufacturinggroup.net', 'productionservices.com', 'factorytech.io', 'industrialequipment.com'],
+            'Retail': ['retailgroup.com', 'shoppingsolutions.net', 'consumerproducts.com', 'retailtech.io', 'marketingsolutions.com'],
+            'Consulting': ['consultinggroup.com', 'advisoryservices.net', 'businessconsultants.com', 'strategyadvisors.io', 'consultingfirm.com']
+        }
+        
+        # External company names by industry
+        self.industry_companies = {
+            'Technology': ['TechCorp', 'InnovateTech', 'NextSoftware', 'CloudServices', 'DataTech'],
+            'Healthcare': ['HealthSolutions', 'MedicalGroup', 'CareProviders', 'HealthTech', 'MedicalServices'],
+            'Finance': ['FinancialGroup', 'InvestmentFirm', 'BankingSolutions', 'WealthManagement', 'FinTech'],
+            'Education': ['LearningSolutions', 'EducationGroup', 'AcademicServices', 'TrainingPro', 'EdTech'],
+            'Manufacturing': ['IndustrialSolutions', 'ManufacturingGroup', 'ProductionServices', 'FactoryTech', 'IndustrialEquipment'],
+            'Retail': ['RetailGroup', 'ShoppingSolutions', 'ConsumerProducts', 'RetailTech', 'MarketingSolutions'],
+            'Consulting': ['ConsultingGroup', 'AdvisoryServices', 'BusinessConsultants', 'StrategyAdvisors', 'ConsultingFirm']
+        }
     
     def generate_leads(self, company_analysis, domain):
         """Generate potential leads based on company analysis"""
@@ -36,6 +60,32 @@ class LeadGenerator:
         
         # Generate leads based on decision maker roles
         leads = []
+        
+        # Generate internal leads (from the analyzed company)
+        internal_leads = self._generate_internal_leads(company_analysis, domain)
+        leads.extend(internal_leads)
+        
+        # Generate external leads (potential customers or partners)
+        if self.find_external_leads:
+            external_leads = self._generate_external_leads(company_analysis, domain)
+            leads.extend(external_leads)
+        
+        # Add timestamp for cache management
+        result = {
+            'leads': leads,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Cache the results if enabled
+        if self.use_cache:
+            cache_key = f"leads_{domain}"
+            self._cache_results(cache_key, result)
+        
+        return result['leads']
+        
+    def _generate_internal_leads(self, company_analysis, domain):
+        """Generate leads from within the analyzed company"""
+        internal_leads = []
         
         # Get decision maker roles from company analysis
         roles = company_analysis.get('decision_maker_roles', [])
@@ -51,20 +101,52 @@ class LeadGenerator:
         # Generate leads for each role
         for role in roles:
             lead = self._create_lead_for_role(role, domain, company_analysis)
-            leads.append(lead)
+            lead['lead_type'] = 'internal'
+            internal_leads.append(lead)
+            
+        return internal_leads
+    
+    def _generate_external_leads(self, company_analysis, domain):
+        """Generate external leads that would be potential customers or partners"""
+        external_leads = []
         
-        # Add timestamp for cache management
-        result = {
-            'leads': leads,
-            'timestamp': datetime.now().isoformat()
-        }
+        # Extract key information from company analysis
+        industry = company_analysis.get('industry', 'Unknown')
+        company_type = company_analysis.get('company_type', 'B2B')
+        target_market = company_analysis.get('target_market', [])
+        offerings = company_analysis.get('offerings', [])
+        company_size = company_analysis.get('company_size', 'Medium')
         
-        # Cache the results if enabled
-        if self.use_cache:
-            cache_key = f"leads_{domain}"
-            self._cache_results(cache_key, result)
+        # Determine potential customer industries based on offerings and target market
+        potential_industries = self._determine_potential_customer_industries(industry, offerings, target_market)
         
-        return result['leads']
+        # Generate 2-3 external leads
+        num_leads = random.randint(2, 3)
+        for _ in range(num_leads):
+            # Select a random industry for this lead
+            target_industry = random.choice(potential_industries)
+            
+            # Get appropriate roles for this industry
+            roles = self._get_target_roles_for_industry(target_industry, offerings)
+            role = random.choice(roles)
+            
+            # Get a company domain for this industry
+            if target_industry in self.industry_domains:
+                company_domain = random.choice(self.industry_domains[target_industry])
+                company_name = random.choice(self.industry_companies[target_industry])
+            else:
+                # Fallback to generic domains
+                company_domain = f"{target_industry.lower().replace(' ', '')}company.com"
+                company_name = f"{target_industry} Company"
+            
+            # Create the lead
+            lead = self._create_lead_for_role(role, company_domain, company_analysis)
+            lead['lead_type'] = 'external'
+            lead['company_name'] = company_name
+            lead['target_reason'] = self._generate_target_reason(company_analysis, target_industry, role)
+            external_leads.append(lead)
+            
+        return external_leads
     
     def _create_lead_for_role(self, role, domain, company_analysis):
         """Create a lead profile for a specific role"""
@@ -211,6 +293,177 @@ class LeadGenerator:
         
         return suggestions[:3]  # Limit to top 3 suggestions
     
+    def _determine_potential_customer_industries(self, industry, offerings, target_market):
+        """Determine potential customer industries based on company analysis"""
+        potential_industries = []
+        
+        # Convert offerings and target_market to lists if they're not already
+        if isinstance(offerings, str):
+            offerings = [offerings]
+        if isinstance(target_market, str):
+            target_market = [target_market]
+            
+        # Default industries to consider
+        all_industries = [
+            'Technology', 'Healthcare', 'Finance', 'Education', 
+            'Manufacturing', 'Retail', 'Consulting'
+        ]
+        
+        # If we have specific target markets, use them to determine industries
+        if target_market and target_market != ["Unknown - LLM analysis required"]:
+            for market in target_market:
+                market_lower = market.lower()
+                
+                # Check for industry mentions in target market
+                for ind in all_industries:
+                    if ind.lower() in market_lower:
+                        potential_industries.append(ind)
+                
+                # Check for B2B/B2C indicators
+                if 'b2b' in market_lower or 'business' in market_lower or 'companies' in market_lower:
+                    # For B2B, add industries that commonly need business services
+                    potential_industries.extend(['Technology', 'Finance', 'Consulting'])
+                    
+                if 'b2c' in market_lower or 'consumer' in market_lower or 'individual' in market_lower:
+                    # For B2C, add industries that commonly serve consumers
+                    potential_industries.extend(['Retail', 'Healthcare', 'Education'])
+        
+        # Use offerings to further refine potential industries
+        if offerings and offerings != ["Unknown - LLM analysis required"]:
+            for offering in offerings:
+                offering_lower = offering.lower()
+                
+                # Technology-related offerings
+                if any(term in offering_lower for term in ['software', 'app', 'platform', 'tech', 'digital', 'ai', 'data']):
+                    potential_industries.extend(['Technology', 'Finance', 'Healthcare'])
+                    
+                # Healthcare-related offerings
+                if any(term in offering_lower for term in ['health', 'medical', 'care', 'patient', 'wellness']):
+                    potential_industries.extend(['Healthcare', 'Education'])
+                    
+                # Financial-related offerings
+                if any(term in offering_lower for term in ['finance', 'payment', 'banking', 'investment', 'insurance']):
+                    potential_industries.extend(['Finance', 'Retail', 'Technology'])
+                    
+                # Education-related offerings
+                if any(term in offering_lower for term in ['education', 'learning', 'training', 'course', 'teach']):
+                    potential_industries.extend(['Education', 'Technology', 'Healthcare'])
+                    
+                # Manufacturing-related offerings
+                if any(term in offering_lower for term in ['manufacturing', 'production', 'factory', 'industrial']):
+                    potential_industries.extend(['Manufacturing', 'Technology'])
+                    
+                # Retail-related offerings
+                if any(term in offering_lower for term in ['retail', 'shop', 'store', 'product', 'consumer']):
+                    potential_industries.extend(['Retail', 'Technology'])
+                    
+                # Consulting-related offerings
+                if any(term in offering_lower for term in ['consulting', 'advisory', 'strategy', 'service']):
+                    potential_industries.extend(['Consulting', 'Finance', 'Technology'])
+        
+        # If we still don't have any potential industries, use the company's own industry
+        # and add some complementary industries
+        if not potential_industries and industry != 'Unknown':
+            potential_industries.append(industry)
+            
+            # Add complementary industries
+            industry_complements = {
+                'Technology': ['Finance', 'Healthcare', 'Retail'],
+                'Healthcare': ['Technology', 'Education', 'Finance'],
+                'Finance': ['Technology', 'Consulting', 'Retail'],
+                'Education': ['Technology', 'Healthcare', 'Consulting'],
+                'Manufacturing': ['Technology', 'Consulting', 'Retail'],
+                'Retail': ['Technology', 'Finance', 'Consulting'],
+                'Consulting': ['Finance', 'Technology', 'Manufacturing']
+            }
+            
+            if industry in industry_complements:
+                potential_industries.extend(industry_complements[industry])
+        
+        # If we still don't have any industries, use all of them
+        if not potential_industries:
+            potential_industries = all_industries
+        
+        # Remove duplicates and the company's own industry
+        potential_industries = list(set(potential_industries))
+        if industry in potential_industries:
+            potential_industries.remove(industry)
+            
+        # Ensure we have at least 3 industries
+        while len(potential_industries) < 3 and len(all_industries) > 0:
+            random_industry = random.choice(all_industries)
+            if random_industry != industry and random_industry not in potential_industries:
+                potential_industries.append(random_industry)
+                
+        return potential_industries
+    
+    def _get_target_roles_for_industry(self, industry, offerings):
+        """Get appropriate decision maker roles for the target industry based on offerings"""
+        # Default roles by industry
+        industry_roles = {
+            'Technology': ['CTO', 'CIO', 'VP of Engineering', 'IT Director', 'Head of Digital'],
+            'Healthcare': ['Medical Director', 'Chief of Operations', 'Head of Patient Services', 'IT Director', 'Clinical Director'],
+            'Finance': ['CFO', 'Head of Risk', 'Investment Director', 'VP of Operations', 'Technology Director'],
+            'Education': ['Dean', 'Principal', 'Director of IT', 'Head of Operations', 'Chief Academic Officer'],
+            'Manufacturing': ['COO', 'Production Director', 'VP of Operations', 'Supply Chain Manager', 'Plant Manager'],
+            'Retail': ['CMO', 'Head of Merchandising', 'Operations Director', 'Digital Director', 'Customer Experience Manager'],
+            'Consulting': ['Managing Partner', 'Practice Lead', 'Director of Operations', 'Business Development Manager', 'Senior Consultant']
+        }
+        
+        # Get the default roles for this industry
+        roles = industry_roles.get(industry, ['CEO', 'COO', 'CTO'])
+        
+        # Refine based on offerings if available
+        if offerings and offerings != ["Unknown - LLM analysis required"]:
+            for offering in offerings:
+                offering_lower = offering.lower()
+                
+                # Technology-focused offerings
+                if any(term in offering_lower for term in ['software', 'app', 'platform', 'tech', 'digital', 'ai', 'data']):
+                    roles.extend(['CTO', 'CIO', 'IT Director', 'Digital Transformation Lead'])
+                    
+                # Marketing-focused offerings
+                if any(term in offering_lower for term in ['marketing', 'brand', 'advertising', 'social media', 'content']):
+                    roles.extend(['CMO', 'Marketing Director', 'Brand Manager', 'Digital Marketing Lead'])
+                    
+                # Operations-focused offerings
+                if any(term in offering_lower for term in ['operations', 'process', 'efficiency', 'workflow', 'management']):
+                    roles.extend(['COO', 'Operations Director', 'Process Improvement Manager'])
+                    
+                # Finance-focused offerings
+                if any(term in offering_lower for term in ['finance', 'payment', 'banking', 'investment', 'accounting']):
+                    roles.extend(['CFO', 'Finance Director', 'Controller', 'Treasurer'])
+        
+        # Remove duplicates
+        roles = list(set(roles))
+        
+        return roles
+    
+    def _generate_target_reason(self, company_analysis, target_industry, role):
+        """Generate a reason why this lead would be interested in the company's offerings"""
+        # Extract key information
+        offerings = company_analysis.get('offerings', [])
+        if isinstance(offerings, str):
+            offerings = [offerings]
+            
+        industry = company_analysis.get('industry', 'Unknown')
+        company_type = company_analysis.get('company_type', 'B2B')
+        
+        # Generate a reason based on the role and industry
+        reasons = [
+            f"As a {role} in the {target_industry} industry, they could benefit from your {industry} expertise",
+            f"Their {target_industry} business faces challenges that your offerings could address",
+            f"Your solutions are well-suited for {target_industry} companies with {role}s looking to improve operations"
+        ]
+        
+        # Add offering-specific reasons if available
+        if offerings and offerings != ["Unknown - LLM analysis required"]:
+            for offering in offerings[:2]:  # Use up to 2 offerings
+                reasons.append(f"Your {offering} offering would be valuable to a {role} in {target_industry}")
+        
+        # Return a random reason
+        return random.choice(reasons)
+    
     def _get_default_roles(self, company_type):
         """Get default decision maker roles based on company type"""
         default_roles = {
@@ -261,7 +514,10 @@ class LeadGenerator:
 # Function to be imported by other modules
 def generate_leads(company_analysis, domain):
     """Generate leads based on company analysis"""
-    generator = LeadGenerator()
+    # Check if we should find external leads
+    find_external_leads = os.environ.get('FIND_EXTERNAL_LEADS', 'True').lower() == 'true'
+    
+    generator = LeadGenerator(find_external_leads=find_external_leads)
     return generator.generate_leads(company_analysis, domain)
 
 # For testing

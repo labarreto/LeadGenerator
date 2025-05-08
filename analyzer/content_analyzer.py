@@ -115,64 +115,119 @@ class ContentAnalyzer:
     def _analyze_with_ollama(self, content):
         """Use Ollama for local LLM analysis - optimized for lightweight models"""
         try:
-            # Prepare a more concise prompt to reduce token usage
-            prompt = f"""
-            Analyze this website content and extract company information.
+            # First, perform a focused analysis on key business attributes
+            business_prompt = f"""
+            Analyze this website content and extract detailed business information.
+            
+            {content}
+            
+            Focus on these THREE specific areas with detailed analysis:
+            
+            1. COMPANY SIZE: Analyze employee count, office locations, revenue indicators, client size, etc.
+               Classify as Small (1-50 employees), Medium (51-500), or Large (500+).
+               Provide specific evidence from the content.
+            
+            2. TARGET MARKET: Who exactly are their ideal customers? Be specific about:
+               - Industries they target
+               - Company sizes they serve
+               - Geographic regions they focus on
+               - Specific roles or departments they sell to
+            
+            3. OFFERINGS: What specific products/services do they provide?
+               - List main product/service categories
+               - Identify their flagship or primary offerings
+               - Note any specialized or unique offerings
+            
+            Format your response as JSON with these keys: company_size, target_market, offerings
+            For target_market and offerings, provide arrays with specific items, not just general descriptions.
+            """
+            
+            # Call Ollama for the focused business analysis
+            business_response = ollama.generate(
+                model=self.model_name, 
+                prompt=business_prompt,
+                options={"num_predict": 1000}
+            )
+            
+            # Now get the general company information with a separate prompt
+            general_prompt = f"""
+            Analyze this website content and extract basic company information.
             
             {content}
             
             Extract and return ONLY these fields in JSON format:
             - company_type: B2B, B2C, Government, or Non-profit
             - industry: Main industry
-            - target_market: Target customers
-            - offerings: List of main products/services
             - decision_maker_roles: List of 2-3 job titles who would make purchasing decisions
-            - company_size: Small, Medium, or Large
             - pain_points: Main challenges they might face
             
             Return ONLY valid JSON with these exact keys.
             """
             
-            # Call Ollama with reduced output length
-            response = ollama.generate(
+            # Call Ollama for the general company information
+            general_response = ollama.generate(
                 model=self.model_name, 
-                prompt=prompt,
-                options={"num_predict": 800}  # Limit output size to save resources
+                prompt=general_prompt,
+                options={"num_predict": 800}
             )
             
-            # Extract JSON from response
-            json_match = re.search(r'```json\s*(.*?)\s*```', response['response'], re.DOTALL)
+            # Combine the responses
+            business_data = self._extract_json_from_response(business_response['response'])
+            general_data = self._extract_json_from_response(general_response['response'])
+            
+            # Create a combined response
+            response = {'response': json.dumps({**general_data, **business_data})}
+            
+            # Process the combined response
+            return self._process_llm_response(response)
+        except Exception as e:
+            print(f"Error in Ollama analysis: {str(e)}")
+            return self._analyze_without_llm(content)
+                
+    def _extract_json_from_response(self, text):
+        """Extract JSON from LLM response"""
+        # Try to find JSON with markdown formatting
+        json_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            # Try to find JSON without markdown formatting
+            json_match = re.search(r'(\{.*\})', text, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
             else:
-                # Try to find JSON without markdown formatting
-                json_match = re.search(r'(\{.*\})', response['response'], re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(1)
-                else:
-                    json_str = response['response']
+                json_str = text
+        
+        # Remove any non-JSON text before or after the JSON object
+        json_str = re.sub(r'^[^{]*', '', json_str)
+        json_str = re.sub(r'[^}]*$', '', json_str)
+        
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            return {}
+    
+    def _process_llm_response(self, response):
+        """Process the LLM response and ensure all required fields are present"""
+        try:
+            # Extract JSON from response
+            if isinstance(response, dict) and 'response' in response:
+                result = json.loads(response['response'])
+            else:
+                result = self._extract_json_from_response(response)
             
-            # Clean up and parse JSON
-            try:
-                # Remove any non-JSON text before or after the JSON object
-                json_str = re.sub(r'^[^{]*', '', json_str)
-                json_str = re.sub(r'[^}]*$', '', json_str)
+            # Ensure all expected keys are present
+            expected_keys = ['company_type', 'industry', 'target_market', 'offerings', 
+                            'decision_maker_roles', 'company_size', 'pain_points']
+            
+            for key in expected_keys:
+                if key not in result:
+                    result[key] = "Not identified"
                 
-                result = json.loads(json_str)
-                
-                # Ensure all expected keys are present
-                expected_keys = ['company_type', 'industry', 'target_market', 'offerings', 
-                                'decision_maker_roles', 'company_size', 'pain_points']
-                
-                for key in expected_keys:
-                    if key not in result:
-                        result[key] = "Not identified"
-                
-                return result
-            except json.JSONDecodeError:
-                print("Failed to parse JSON from LLM response. Falling back to rule-based analysis.")
-                return self._analyze_without_llm(content)
-                
+            return result
+        except json.JSONDecodeError:
+            print("Failed to parse JSON from LLM response. Falling back to rule-based analysis.")
+            return self._analyze_without_llm(content)
         except Exception as e:
             print(f"Error using Ollama: {str(e)}")
             return self._analyze_without_llm(content)
@@ -183,15 +238,15 @@ class ContentAnalyzer:
         result = {
             'company_type': self._guess_company_type(content),
             'industry': self._guess_industry(content),
-            'target_market': "Unknown - LLM analysis required",
+            'target_market': self._guess_target_market(content),
             'offerings': self._extract_offerings(content),
             'decision_maker_roles': self._guess_decision_makers(content),
-            'company_size': "Unknown - LLM analysis required",
-            'pain_points': "Unknown - LLM analysis required"
+            'company_size': self._guess_company_size(content),
+            'pain_points': self._guess_pain_points(content)
         }
         
         return result
-    
+        
     def _guess_company_type(self, content):
         """Simple rule-based company type detection"""
         content = content.lower()
@@ -206,7 +261,7 @@ class ContentAnalyzer:
             return "Non-profit"
         else:
             return "Unknown"
-    
+            
     def _guess_industry(self, content):
         """Simple rule-based industry detection"""
         content = content.lower()
@@ -227,7 +282,7 @@ class ContentAnalyzer:
                     return industry
         
         return "Unknown"
-    
+        
     def _extract_offerings(self, content):
         """Extract potential offerings from content"""
         # This is a very basic extraction and would be much better with LLM
@@ -238,6 +293,88 @@ class ContentAnalyzer:
         for match in service_matches:
             if 10 < len(match) < 100:  # Filter out very short or long matches
                 offerings.append(match.strip())
+    
+    def _guess_company_size(self, content):
+        """Guess the company size from content"""
+        # Look for employee count indicators
+        small_indicators = ['small', 'startup', 'founder', 'small business']
+        medium_indicators = ['growing', 'mid-size', 'medium']
+        large_indicators = ['enterprise', 'corporation', 'global', 'nationwide', 'international']
+        
+        # Check for size indicators
+        for indicator in large_indicators:
+            if re.search(r'\b' + indicator + r'\b', content, re.I):
+                return "Large"
+                
+        for indicator in medium_indicators:
+            if re.search(r'\b' + indicator + r'\b', content, re.I):
+                return "Medium"
+                
+        for indicator in small_indicators:
+            if re.search(r'\b' + indicator + r'\b', content, re.I):
+                return "Small"
+        
+        # Look for team/employee mentions
+        team_match = re.search(r'team of (\d+)', content, re.I)
+        if team_match:
+            count = int(team_match.group(1))
+            if count < 50:
+                return "Small"
+            elif count < 500:
+                return "Medium"
+            else:
+                return "Large"
+        
+        return "Unknown - LLM analysis required"
+        
+    def _guess_target_market(self, content):
+        """Guess the target market from content"""
+        target_markets = []
+        
+        # Look for common target market indicators
+        b2b_indicators = ['enterprise', 'business', 'companies', 'organizations', 'firms']
+        b2c_indicators = ['consumer', 'individual', 'personal', 'people', 'family']
+        industry_indicators = ['healthcare', 'finance', 'retail', 'education', 'manufacturing', 'technology']
+        
+        # Check for B2B/B2C indicators
+        for indicator in b2b_indicators:
+            if re.search(r'\b' + indicator + r'\b', content, re.I):
+                target_markets.append('B2B Companies')
+                break
+                
+        for indicator in b2c_indicators:
+            if re.search(r'\b' + indicator + r'\b', content, re.I):
+                target_markets.append('Individual Consumers')
+                break
+                
+        # Check for industry-specific indicators
+        for indicator in industry_indicators:
+            if re.search(r'\b' + indicator + r'\b', content, re.I):
+                target_markets.append(f'{indicator.title()} Industry')
+        
+        # Return results or default
+        return target_markets if target_markets else ["Unknown - LLM analysis required"]
+        
+    def _guess_pain_points(self, content):
+        """Guess potential pain points from content"""
+        pain_points = []
+        
+        # Look for common pain point indicators
+        pain_indicators = [
+            'challenge', 'problem', 'struggle', 'difficulty', 'obstacle',
+            'improve', 'optimize', 'streamline', 'enhance', 'simplify',
+            'reduce costs', 'save time', 'increase efficiency'
+        ]
+        
+        for indicator in pain_indicators:
+            pattern = r'(?:' + indicator + r')\s+([^.!?;]+)'
+            matches = re.findall(pattern, content, re.I)
+            for match in matches:
+                if 10 < len(match) < 100:  # Filter out very short or long matches
+                    pain_points.append(match.strip())
+        
+        # Return results or default
+        return pain_points if pain_points else ["Unknown - LLM analysis required"]
         
         # Look for list items that might be services
         list_items = re.findall(r'[•*\-]\s+([^•*\-\n]+)', content)

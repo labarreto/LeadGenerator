@@ -44,6 +44,20 @@ def format_results(url, company_analysis, leads):
     """Format the final results for display and export"""
     domain = get_domain_from_url(url)
     
+    # Ensure offerings is always a list
+    offerings = company_analysis.get('offerings', [])
+    if offerings is None:
+        offerings = []
+    elif isinstance(offerings, str):
+        offerings = [offerings]
+        
+    # Ensure target_market is always a string
+    target_market = company_analysis.get('target_market', 'Unknown')
+    if isinstance(target_market, list):
+        target_market = ', '.join(target_market)
+    elif target_market is None:
+        target_market = 'Unknown'
+    
     # Create a structured result object
     result = {
         'url': url,
@@ -53,8 +67,8 @@ def format_results(url, company_analysis, leads):
             'type': company_analysis.get('company_type', 'Unknown'),
             'industry': company_analysis.get('industry', 'Unknown'),
             'size': company_analysis.get('company_size', 'Unknown'),
-            'target_market': company_analysis.get('target_market', 'Unknown'),
-            'offerings': company_analysis.get('offerings', [])
+            'target_market': target_market,
+            'offerings': offerings
         },
         'leads': []
     }
@@ -66,8 +80,15 @@ def format_results(url, company_analysis, leads):
             'role': lead.get('role', ''),
             'email': lead.get('email', ''),
             'confidence_score': lead.get('confidence_score', 0),
-            'outreach_suggestions': lead.get('outreach_suggestions', [])
+            'outreach_suggestions': lead.get('outreach_suggestions', []),
+            'lead_type': lead.get('lead_type', 'internal')
         }
+        
+        # Add company_name and target_reason for external leads
+        if lead.get('lead_type') == 'external':
+            formatted_lead['company_name'] = lead.get('company_name', '')
+            formatted_lead['target_reason'] = lead.get('target_reason', '')
+            
         result['leads'].append(formatted_lead)
     
     return result
