@@ -6,16 +6,13 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.helpers import get_cache_path
 
-# Import LLM modules
-try:
-    import ollama
-except ImportError:
-    ollama = None
+# Import LLM interface
+from .llm_interface import query_llm, extract_json_from_response
 
 class ContentAnalyzer:
     """Class to analyze website content and extract company information using LLMs"""
     
-    def __init__(self, use_local_llm=True, model_name="phi3", use_cache=True, cache_expiry=86400):
+    def __init__(self, use_local_llm=False, model_name="gpt-4.1-nano", use_cache=True, cache_expiry=86400):
         """Initialize the content analyzer with LLM options"""
         self.use_local_llm = use_local_llm
         self.model_name = model_name
@@ -23,10 +20,8 @@ class ContentAnalyzer:
         self.cache_expiry = cache_expiry
         self.company_analysis = {}
         
-        # Check if we can use the local LLM
-        if self.use_local_llm and ollama is None:
-            print("Warning: Ollama not installed. Falling back to API-based LLMs if configured.")
-            self.use_local_llm = False
+        # Local LLM is disabled, using OpenAI instead
+        self.use_local_llm = False
     
     def analyze_company(self, website_data):
         """Analyze website content to extract company information"""
@@ -109,87 +104,58 @@ class ContentAnalyzer:
         return content
     
     def _analyze_with_llm(self, content):
-        """Use LLM to analyze the content"""
-        if self.use_local_llm:
-            return self._analyze_with_ollama(content)
-        else:
-            return self._analyze_without_llm(content)
+        """Use LLM to analyze website content"""
+        return self._analyze_with_openai(content)
     
-    def _analyze_with_ollama(self, content):
-        """Use Ollama for local LLM analysis - optimized for lightweight models"""
+    def _analyze_with_openai(self, content):
+        """Use OpenAI for content analysis"""
         try:
-            # Create a prompt that will generate structured output
-            system_prompt = """You are an AI assistant that analyzes company websites and extracts structured information.
-            Analyze the provided website content and extract the following information:
-            - company_type: Whether the company is B2B, B2C, Government, or Non-profit
-            - industry: The industry the company operates in (Technology, Healthcare, Finance, Education, Manufacturing, Retail, Consulting, etc.)
-            - company_size: Estimated size (Small, Medium, Large)
-            - target_market: Who the company sells to or serves
-            - offerings: List of main products or services the company provides
-            - pain_points: List of customer pain points the company addresses
+            # Prepare the prompt for company analysis
+            prompt = f"""
+            You are a business analyst expert. Analyze the following website content and extract key information about the company.
             
-            Return your analysis as a JSON object with these fields. If you cannot determine a value with confidence, use "Unknown" for that field.
+            IMPORTANT: Focus especially on identifying SPECIFIC offerings/products/services and the target market.
+            
+            Return the results in JSON format with the following fields:
+            - company_name: The name of the company
+            - industry: The specific industry or sector the company operates in (be detailed, not general)
+            - company_size: Estimated company size (small, medium, large)
+            - target_market: Who the company sells to (B2B, B2C, or both) - BE SPECIFIC about the types of customers
+            - offerings: List of SPECIFIC products or services the company offers (at least 3-5 items if possible)
+            - company_description: A brief description of what the company does
+            - location: Company headquarters location if mentioned
+            - founded_year: When the company was founded if mentioned
+            - key_people: Key executives or team members if mentioned
+            - contact_info: Contact information if available
+            - social_media: Social media links if available
+            
+            IMPORTANT GUIDELINES:
+            1. For offerings: List SPECIFIC named products/services, not general categories
+            2. For target_market: Be specific about the types of customers (e.g., "Enterprise healthcare providers" not just "B2B")
+            3. NEVER use "Unknown - LLM analysis required" - make your best inference based on the content
+            4. If information isn't explicitly stated, make reasonable inferences based on the content
+            
+            Website Content:
+            {content[:2000]}  # Limit content to avoid token limits
+            
+            Return ONLY valid JSON without any additional text or explanation.
             """
             
-            # Prepare the prompt with the content
-            prompt = f"{system_prompt}\n\nWebsite Content to Analyze:\n{content}"
+            # Call OpenAI with the prompt
+            response_text = query_llm(prompt, model=self.model_name)
             
-            # Call Ollama with the prompt
-            response = ollama.chat(
-                model=self.model_name,
-                messages=[
-                    {
-                        'role': 'system',
-                        'content': system_prompt
-                    },
-                    {
-                        'role': 'user',
-                        'content': f"Website Content to Analyze:\n{content}"
-                    }
-                ],
-                options={
-                    'temperature': 0.2,  # Low temperature for more factual responses
-                    'num_predict': 2048  # Limit token generation
-                }
-            )
-            
-            # Extract the response text
-            response_text = response['message']['content']
-            
-            # Try to extract JSON from the response
-            result = self._extract_json_from_response(response_text)
-            
-            # Process the result to ensure all required fields are present
-            processed_result = self._process_llm_response(result)
-            
-            return processed_result
-            
+            # Parse the JSON response
+            try:
+                result = extract_json_from_response(response_text)
+                return self._process_llm_response(result)
+            except json.JSONDecodeError:
+                print("Failed to parse LLM response as JSON")
+                return self._analyze_without_llm(content)
+                
         except Exception as e:
-            print(f"Error using Ollama: {str(e)}")
+            print(f"Error using OpenAI: {str(e)}")
             # Fall back to rule-based analysis
             return self._analyze_without_llm(content)
-    
-    def _extract_json_from_response(self, text):
-        """Extract JSON from LLM response"""
-        try:
-            # Try to find JSON in the response
-            json_match = re.search(r'```(?:json)?\s*({[\s\S]*?})\s*```', text)
-            if json_match:
-                json_str = json_match.group(1)
-                return json.loads(json_str)
-            
-            # If no JSON in code blocks, try to find JSON directly
-            json_match = re.search(r'({[\s\S]*})', text)
-            if json_match:
-                json_str = json_match.group(1)
-                return json.loads(json_str)
-            
-            # If still no JSON, try to parse the entire response
-            return json.loads(text)
-        except Exception as e:
-            print(f"Error extracting JSON: {str(e)}")
-            # Return empty dict if we can't parse JSON
-            return {}
     
     def _process_llm_response(self, response):
         """Process the LLM response and ensure all required fields are present"""
@@ -299,7 +265,7 @@ class ContentAnalyzer:
         
         try:
             if self.use_local_llm:
-                offerings_text = self._analyze_with_ollama(offerings_prompt)
+                offerings_text = query_llm(offerings_prompt, model=self.model_name)
                 if isinstance(offerings_text, dict) and 'offerings' in offerings_text:
                     offerings = offerings_text['offerings']
                     if isinstance(offerings, list):
@@ -510,7 +476,7 @@ def analyze_company(website_data, use_cache=True):
     """Analyze website data and extract company information"""
     # Get settings from environment variables or use defaults
     use_local_llm = os.environ.get('USE_LOCAL_LLM', 'True').lower() == 'true'
-    model_name = os.environ.get('LLM_MODEL', 'phi3')
+    model_name = os.environ.get('OPENAI_MODEL', 'gpt-4.1-nano')
     
     analyzer = ContentAnalyzer(use_local_llm=use_local_llm, model_name=model_name, use_cache=use_cache)
     return analyzer.analyze_company(website_data)

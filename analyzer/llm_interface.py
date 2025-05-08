@@ -1,10 +1,11 @@
 """
-Interface for querying local LLMs using Ollama
+Interface for querying LLMs using OpenAI API
 """
 import os
 import json
 import requests
 import time
+from openai import OpenAI
 
 # Simple function to load environment variables from .env file
 def load_env_from_file():
@@ -14,25 +15,34 @@ def load_env_from_file():
                 line = line.strip()
                 if line and not line.startswith('#') and '=' in line:
                     key, value = line.split('=', 1)
-                    os.environ[key.strip()] = value.strip().strip('"\'')
+                    os.environ[key] = value
     except Exception as e:
         print(f"Warning: Could not load .env file: {e}")
 
-# Load environment variables
-load_env_from_file()
+# Try to load environment variables from .env file if not already set
+if 'OPENAI_API_KEY' not in os.environ:
+    load_env_from_file()
 
 # Get LLM configuration from environment variables
-USE_LOCAL_LLM = os.getenv('USE_LOCAL_LLM', 'True').lower() == 'true'
-LLM_MODEL = os.getenv('LLM_MODEL', 'phi3')
-OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+USE_LOCAL_LLM = os.getenv('USE_LOCAL_LLM', 'False').lower() == 'true'
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4.1-nano')
 
-def query_ollama(prompt, model=None, temperature=0.7, max_retries=3, retry_delay=2):
+# Initialize OpenAI client
+client = None
+if OPENAI_API_KEY:
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        print(f"Warning: Failed to initialize OpenAI client: {e}")
+
+def query_llm(prompt, model=None, temperature=0.7, max_retries=3, retry_delay=2):
     """
-    Query Ollama LLM with the given prompt
+    Query LLM with the given prompt
     
     Args:
         prompt (str): The prompt to send to the LLM
-        model (str, optional): The model to use. Defaults to the LLM_MODEL env var.
+        model (str, optional): The model to use. Defaults to the OPENAI_MODEL env var.
         temperature (float, optional): Sampling temperature. Defaults to 0.7.
         max_retries (int, optional): Maximum number of retries. Defaults to 3.
         retry_delay (int, optional): Delay between retries in seconds. Defaults to 2.
@@ -40,41 +50,54 @@ def query_ollama(prompt, model=None, temperature=0.7, max_retries=3, retry_delay
     Returns:
         str: The LLM response text
     """
-    if not USE_LOCAL_LLM:
-        print("Local LLM is disabled. Using fallback methods.")
-        return "Local LLM is disabled"
-    
     # Use the specified model or fall back to the default
-    model_name = model or LLM_MODEL
+    model_name = model or OPENAI_MODEL
     
-    # Prepare the request payload
-    payload = {
-        "model": model_name,
-        "prompt": prompt,
-        "temperature": temperature,
-        "stream": False
-    }
+    print(f"\n[DEBUG] Querying OpenAI with model: {model_name}")
+    print(f"[DEBUG] Prompt length: {len(prompt)} characters")
     
-    # Endpoint for Ollama API
-    url = f"{OLLAMA_BASE_URL}/api/generate"
+    if not OPENAI_API_KEY:
+        print("OpenAI API key is not set. Using fallback methods.")
+        return "OpenAI API key is not set"
+    
+    if client is None:
+        print("OpenAI client is not initialized. Using fallback methods.")
+        return "OpenAI client is not initialized"
     
     # Try to query the LLM with retries
     for attempt in range(max_retries):
         try:
-            response = requests.post(url, json=payload, timeout=60)
+            print(f"[DEBUG] Attempt {attempt+1}/{max_retries} to query OpenAI")
             
-            if response.status_code == 200:
-                result = response.json()
-                return result.get('response', '')
-            else:
-                print(f"Error querying Ollama (Attempt {attempt+1}/{max_retries}): Status {response.status_code}")
-                time.sleep(retry_delay)
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that provides concise, accurate information."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=temperature,
+                max_tokens=1000
+            )
+            
+            print(f"[DEBUG] Successfully received response from OpenAI")
+            return response.choices[0].message.content
+            
         except Exception as e:
-            print(f"Exception querying Ollama (Attempt {attempt+1}/{max_retries}): {str(e)}")
+            print(f"[DEBUG] Exception querying OpenAI (Attempt {attempt+1}/{max_retries}): {str(e)}")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
             time.sleep(retry_delay)
     
     # If all retries failed, return a fallback response
+    print("[DEBUG] All attempts to query OpenAI failed. Using fallback response.")
     return "Failed to get response from LLM"
+
+
+# Legacy function name for backward compatibility
+def query_ollama(prompt, model=None, temperature=0.7, max_retries=3, retry_delay=2):
+    """
+    Legacy function that now redirects to query_llm
+    """
+    return query_llm(prompt, model, temperature, max_retries, retry_delay)
 
 def extract_json_from_response(response_text):
     """

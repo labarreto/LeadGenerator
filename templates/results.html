@@ -41,9 +41,13 @@
                                 <p><strong>Target Market:</strong> {{ results.company.target_market }}</p>
                                 <p><strong>Offerings:</strong></p>
                                 <ul>
-                                    {% for offering in results.company.offerings %}
-                                    <li>{{ offering }}</li>
-                                    {% endfor %}
+                                    {% if results.company.offerings is defined and results.company.offerings %}
+                                        {% for offering in results.company.offerings %}
+                                            <li>{{ offering }}</li>
+                                        {% endfor %}
+                                    {% else %}
+                                        <li>No specific offerings detected</li>
+                                    {% endif %}
                                 </ul>
                             </div>
                         </div>
